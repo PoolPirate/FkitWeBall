@@ -1,4 +1,5 @@
-﻿using FkitWeBall.Models;
+﻿using FkitWeBall.Config;
+using FkitWeBall.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -15,7 +16,8 @@ public class TxSender
     private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger _logger;
 
-    private readonly IReadOnlyList<IRpcClient> _clients;
+    private readonly IReadOnlyList<(IRpcClient, int)> _clients;
+    private readonly int _maxIndex;
 
     public TxSender(IConfiguration configuration, IServiceProvider serviceProvider, IHostApplicationLifetime lifetime, ILogger<TxSender> logger)
     {
@@ -24,31 +26,51 @@ public class TxSender
         _lifetime = lifetime;
         _logger = logger;
 
-        var txUrlSection = _configuration.GetSection("TxRpcUrls");
-        var rpcUrls = txUrlSection.AsEnumerable().Where(x => x.Value is not null).Select(x => x.Value).ToArray();
+        var rpcUrls = _configuration.GetSection("TxRpcUrls").Get<WeightedRPC[]>();
 
-        if (rpcUrls.Length == 0)
+        if (rpcUrls is null || rpcUrls.Length == 0)
         {
             _logger.LogCritical("No TxRpcUrls configured!");
             _lifetime.StopApplication();
             return;
         }
 
-        var clients = new List<IRpcClient>();
+        var clients = new List<(IRpcClient, int)>();
         foreach(var rpcUrl in rpcUrls)
         {
-            clients.Add(ClientFactory.GetClient(rpcUrl, _serviceProvider.GetRequiredService<ILogger<IRpcClient>>()));
+            clients.Add(
+                (ClientFactory.GetClient(rpcUrl.Url, _serviceProvider.GetRequiredService<ILogger<IRpcClient>>()),
+                rpcUrl.Weight) 
+            );
+            _maxIndex += rpcUrl.Weight;
         }
 
         _clients = clients;
     }
 
-    public async Task<RequestResult<string>> SendTransactionAsync(byte[] transaction, int rpcIndex, bool skipPreflight = false, Commitment commitment = Commitment.Finalized)
+    private IRpcClient SelectClient()
     {
-        var rpc = _clients[rpcIndex % _clients.Count];
+        int index = Random.Shared.Next(0, _maxIndex);
+
+        foreach(var (client, weight) in _clients)
+        {
+            if (index < weight)
+            {
+                return client;
+            }
+
+            index -= weight;
+        }
+
+        return _clients[^1].Item1;
+    }
+
+    public async Task<RequestResult<string>> SendTransactionAsync(byte[] transaction, bool skipPreflight = false, Commitment commitment = Commitment.Finalized)
+    {
+        var rpc = SelectClient();
         var response = await rpc.SendTransactionAsync(transaction, skipPreflight, commitment);
 
-        if(response.RawRpcResponse.Contains("credits limited to") || response.RawRpcResponse.Contains("429"))
+        if(response.RawRpcResponse.Contains("credits limited to") || response.RawRpcResponse.Contains("429") || response.RawRpcResponse.Contains("many requests"))
         {
             _logger.LogDebug("Rate limit hit on rpc {rpcUrl}", rpc.NodeAddress);
         }

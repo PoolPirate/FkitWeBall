@@ -115,11 +115,10 @@ public class MinerService
     private async Task SendAndConfirmHashAsync(Account account, string keyFile, byte[] hash, ulong nonce)
     {
         var (tx, blockHash) = await MakeMiningTxAsync(account, hash, nonce);
-        int rpcIndex = 0;
 
         while(true)
         {
-            (var inputUpdate, rpcIndex) = await SendTillRequireNewInputAsync(tx, rpcIndex, account, keyFile);
+            var inputUpdate = await SendTillRequireNewInputAsync(tx, account, keyFile);
 
             switch(inputUpdate)
             {
@@ -138,11 +137,11 @@ public class MinerService
         }
     }
 
-    private async Task<(MineTxInputUpdate, int)> SendTillRequireNewInputAsync(byte[] tx, int rpcIndex, Account account, string keyFile)
+    private async Task<MineTxInputUpdate> SendTillRequireNewInputAsync(byte[] tx, Account account, string keyFile)
     {
         while(true)
         {
-            (var status, rpcIndex) = await TryPublishMineTransactionAsync(tx, rpcIndex);
+            var status = await TryPublishMineTransactionAsync(tx);
 
             switch(status)
             {
@@ -151,68 +150,70 @@ public class MinerService
                     break;
                 case MineTxStatus.Confirmed:
                     _logger.LogInformation("Block mined! Key: {keyFile} ({pubKey})", keyFile, account.PublicKey.Key);
-                    return (MineTxInputUpdate.Hash, rpcIndex);
+                    return MineTxInputUpdate.Hash;
                 case MineTxStatus.BusBusy:
-                    return (MineTxInputUpdate.Bus, rpcIndex);
+                    return MineTxInputUpdate.Bus;
                 case MineTxStatus.NeedsReset:
                     await Task.Delay(1000);
                     break;
                 case MineTxStatus.RateLimited:
-                    await Task.Delay(500);
+                    await Task.Delay(250);
                     break;
                 case MineTxStatus.SlotEnded:
-                    return (MineTxInputUpdate.Slot, rpcIndex);
+                    return MineTxInputUpdate.Slot;
                 case MineTxStatus.Error:
                     await Task.Delay(500);
-                    return (MineTxInputUpdate.Other, rpcIndex + 1);
+                    return MineTxInputUpdate.Other;
             }
         }
     }
 
-    private async Task<(MineTxStatus, int)> TryPublishMineTransactionAsync(byte[] transaction, int rpcIndex)
+    private async Task<MineTxStatus> TryPublishMineTransactionAsync(byte[] transaction)
     {
         try
         {
-            var sendResponse = await _txSender.SendTransactionAsync(transaction, rpcIndex, skipPreflight: false, commitment: Solnet.Rpc.Types.Commitment.Confirmed);
+            var sendResponse = await _txSender.SendTransactionAsync(transaction, skipPreflight: false, commitment: Solnet.Rpc.Types.Commitment.Confirmed);
 
             if(sendResponse is null)
             {
                 _logger.LogWarning("Rpc did not return response while trying to send mine tx");
-                return (MineTxStatus.Unknown, rpcIndex + 1);
+                return MineTxStatus.Unknown;
             }
 
-            if(sendResponse is null || sendResponse.RawRpcResponse.Contains("credits limited to") || sendResponse.RawRpcResponse.Contains("429"))
+            if(sendResponse is null || sendResponse.RawRpcResponse.Contains("credits limited to") 
+                || sendResponse.RawRpcResponse.Contains("429") 
+                || sendResponse.RawRpcResponse.Contains("many requests"))
             {
-                return (MineTxStatus.RateLimited, rpcIndex + 1);
+                return MineTxStatus.RateLimited;
             }
             else if(sendResponse.RawRpcResponse.Contains("custom program error: 0x3") || sendResponse.RawRpcResponse.Contains("already"))
             {
-                return (MineTxStatus.Confirmed, rpcIndex + 1);
+                return MineTxStatus.Confirmed;
             }
             else if(sendResponse.RawRpcResponse.Contains("custom program error: 0x1"))
             {
-                return (MineTxStatus.NeedsReset, rpcIndex + 1);
+                return MineTxStatus.NeedsReset;
             }
             else if(sendResponse.RawRpcResponse.Contains("custom program error: 0x5")) //Bus does not have enough rewards
             {
-                return (MineTxStatus.BusBusy, rpcIndex + 1);
+                return MineTxStatus.BusBusy;
             }
             else if (sendResponse.RawRpcResponse.Contains("Blockhash not found"))
             {
-                return (MineTxStatus.SlotEnded, rpcIndex + 1);
+                return MineTxStatus.SlotEnded;
             }
             else if(sendResponse.RawRpcResponse.Contains("message") || sendResponse.Result is null)
             {
                 _logger.LogWarning("{}", sendResponse.RawRpcResponse);
-                return (MineTxStatus.Error, rpcIndex + 1);
+                return MineTxStatus.Error;
             }
             //
-            return (MineTxStatus.Submitted, rpcIndex + 1);
+            return MineTxStatus.Submitted;
         }
         catch(Exception ex)
         {
             _logger.LogWarning(ex,"There was an exception while sending mine tx");
-            return (MineTxStatus.Unknown, rpcIndex + 1);
+            return MineTxStatus.Unknown;
         }
     }
 }
