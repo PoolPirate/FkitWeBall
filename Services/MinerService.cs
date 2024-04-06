@@ -181,7 +181,7 @@ public class MinerService
                 return (MineTxStatus.Unknown, rpcIndex + 1);
             }
 
-            if(sendResponse is null || sendResponse.RawRpcResponse.Contains("credits limited to"))
+            if(sendResponse is null || sendResponse.RawRpcResponse.Contains("credits limited to") || sendResponse.RawRpcResponse.Contains("429"))
             {
                 return (MineTxStatus.RateLimited, rpcIndex + 1);
             }

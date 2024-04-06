@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using FkitWeBall.Models;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -42,9 +43,16 @@ public class TxSender
         _clients = clients;
     }
 
-    public Task<RequestResult<string>> SendTransactionAsync(byte[] transaction, int rpcIndex, bool skipPreflight = false, Commitment commitment = Commitment.Finalized)
+    public async Task<RequestResult<string>> SendTransactionAsync(byte[] transaction, int rpcIndex, bool skipPreflight = false, Commitment commitment = Commitment.Finalized)
     {
         var rpc = _clients[rpcIndex % _clients.Count];
-        return rpc.SendTransactionAsync(transaction, skipPreflight, commitment);
+        var response = await rpc.SendTransactionAsync(transaction, skipPreflight, commitment);
+
+        if(response.RawRpcResponse.Contains("credits limited to") || response.RawRpcResponse.Contains("429"))
+        {
+            _logger.LogDebug("Rate limit hit on rpc {rpcUrl}", rpc.NodeAddress);
+        }
+
+        return response;
     }
 }
