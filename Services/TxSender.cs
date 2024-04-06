@@ -24,8 +24,9 @@ public class TxSender
         _logger = logger;
 
         var txUrlSection = _configuration.GetSection("TxRpcUrls");
+        var rpcUrls = txUrlSection.AsEnumerable().Where(x => x.Value is not null).Select(x => x.Value).ToArray();
 
-        if(txUrlSection is null)
+        if (rpcUrls.Length == 0)
         {
             _logger.LogCritical("No TxRpcUrls configured!");
             _lifetime.StopApplication();
@@ -33,7 +34,7 @@ public class TxSender
         }
 
         var clients = new List<IRpcClient>();
-        foreach(var rpcUrl in txUrlSection.AsEnumerable().Where(x => x.Value is not null).Select(x => x.Value))
+        foreach(var rpcUrl in rpcUrls)
         {
             clients.Add(ClientFactory.GetClient(rpcUrl, _serviceProvider.GetRequiredService<ILogger<IRpcClient>>()));
         }
